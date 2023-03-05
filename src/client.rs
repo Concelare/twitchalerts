@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
-use surrealdb::engine::local::{ Db };
-use surrealdb::{ Surreal };
+use surrealdb::engine::local::Db;
+use surrealdb::Surreal;
 use serde::{Deserialize, Serialize};
 
 use crate::traits::EventHandler;
@@ -64,7 +64,7 @@ impl Client {
             token: token.to_string(),
             status: false,
             event_handler: None,
-            database: None,
+            database: None::<Surreal<Db>>,
         }
     }
 
