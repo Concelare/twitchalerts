@@ -31,7 +31,6 @@ impl crate::traits::EventHandler for Handler {
     }
 }
 
-#[tokio::test]
 async fn main() -> Result<(), ()> {
     let db = Surreal::new::<Mem>(()).await?;
 
