@@ -1,0 +1,16 @@
+[package]
+name = "twitchalerts"
+version = "0.1.0"
+description = "A crate which when it detect that a streamer is live which trigger the event handler, more features to be added."
+edition = "2021"
+license = "MIT AND Apache-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+surrealdb = { git = "https://github.com/surrealdb/surrealdb", features = ["kv-mem"] }
+tokio = { version = "1.25.0", features = ["full"] }
+serde = {version = "1.0.152" }
+reqwest = { version = "0.11.14", features = ["blocking", "json"] }
+chrono = { version = "0.4.23" }
+async-trait = { version = "0.1.64" }
