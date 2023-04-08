@@ -103,7 +103,6 @@ impl Client {
             let streamers: Vec<Streamer> = res.take(0).expect("Error Occurred");
 
             if streamers.is_empty() {
-                println!("Ran");
                 running = false;
             }
 
