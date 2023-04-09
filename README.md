@@ -17,11 +17,12 @@ use chrono::Utc;
 use surrealdb::engine::local::Mem;
 use surrealdb::Surreal;
 use twitchalerts::client::{StreamData, Streamer, Client};
+use twitchalerts::traits::EventHandler;
 
 pub struct Handler;
 
 #[async_trait]
-impl crate::traits::EventHandler for Handler {
+impl EventHandler for Handler {
     async fn on_stream(&self, streamer: &Streamer, stream: &StreamData) {
         !todo();
     }
