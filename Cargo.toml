@@ -1,6 +1,6 @@
 [package]
 name = "twitchalerts"
-version = "0.1.0"
+version = "0.1.1"
 description = "A crate which when it detect that a streamer is live which trigger the event handler, more features to be added."
 edition = "2021"
 license = "Apache-2.0"
