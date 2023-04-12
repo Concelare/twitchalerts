@@ -7,6 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::traits::EventHandler;
 
+/// All Streamer info store in Database
+///
+/// # Parameters
+/// * `id` - Database identifier
+/// * `name` - The Twitch streamer's name for checking
+/// * `alerts` - Are the alerts enabled for the streamer
+/// * `last_streamed` - Stores the date of the last started stream to stop duplicate alerts
 #[derive(Serialize, Deserialize, PartialEq)]
 pub struct Streamer {
     pub id: String,
@@ -15,12 +22,31 @@ pub struct Streamer {
     pub last_streamed: DateTime<Utc>,
 }
 
+/// The Response from the checking request
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StreamsRes {
     pub data: Vec<StreamData>,
     pub pagination: Pagination
 }
 
+/// The data for the stream
+///
+/// # Parameters
+/// * `id` - Stream Identifier
+/// * `user_id` - Streamer's User ID
+/// * `user_login` - Streamer's User Login Name
+/// * `user_name` - Streamer's Username
+/// * `game_id` - The Game Identifier
+/// * `game_name` - The Name of the Game
+/// * `stream_type` - Type of the stream
+/// * `title` - Title of the stream
+/// * `viewer_count` - The Viewer Count
+/// * `started_at` - The Time the Stream Started
+/// * `language` - Language of the Stream
+/// * `thumbnail_url` - Thumbnail of the Stream
+/// * `tags_ids` - IDs of the Tags Used
+/// * `tags` - Tags of the Stream
+/// * `is_mature` - Is the Stream Set As Mature
 #[derive(Serialize, Deserialize)]
 pub struct StreamData {
     pub id: String,
@@ -41,23 +67,49 @@ pub struct StreamData {
     pub is_mature: bool
 }
 
+/// Part of the Response From Twitch
+///
+/// # Parameters
+/// * `cursor` - Cursor String
 #[derive(Serialize, Deserialize)]
-pub struct Pagination {
+pub(crate) struct Pagination {
     pub cursor: String
 }
 
 
+/// Client For Running TwitchAlerts
+///
+/// # Parameters
+/// * `client_id` - Twitch Client ID, can be got from <https://dev.twitch.tv/>
+/// * `token` - Twitch Token, can be got from <https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/>
+/// * `status` - Status of alerts, are the running or not
+/// * `event_handler` - The Event Handler To Handle Alerts and Erros
+/// * `database` - The SurrealDb for the Client
+/// * `delay` - Delay Between Check Cycles
 #[derive(Clone)]
 pub struct Client {
     pub client_id: String,
     pub token: String,
     status: bool,
     event_handler: Option<Arc<dyn EventHandler>>,
-    database: Option<Surreal<Db>>
-
+    database: Option<Surreal<Db>>,
+    delay: tokio::time::Duration
 }
 
 impl Client {
+    /// Used to Create A New Instance of TwitchAlerts Client
+    ///
+    /// # Arguments
+    ///
+    /// * `client_id` - A &str of your Twitch Client ID which can be found at <https://dev.twitch.tv/>
+    /// * `token` - A &str of your Twitch Token which can be found at <https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/>
+    ///
+    /// # Example
+    /// ```
+    /// use twitchalerts::client::Client;
+    ///
+    /// let client: Client = Client::new("client id", "client token");
+    /// ```
     pub fn new(client_id: &str, token: &str) -> Client {
         Client {
             client_id: client_id.to_string(),
@@ -65,21 +117,135 @@ impl Client {
             status: false,
             event_handler: None,
             database: None::<Surreal<Db>>,
+            delay: tokio::time::Duration::from_millis(500)
         }
     }
 
+    /// Used to add the Event Handler to the Client
+    ///
+    /// # Arguments
+    /// * `self` - Requires a Client To Run The Function
+    /// * `event_handler` - Requires a Struct With the EventHandler Trait and it must be Static
+    ///
+    /// # Example
+    /// ```
+    /// use twitchalerts::client::{Client, StreamData, Streamer};
+    /// use twitchalerts::traits::EventHandler;
+    ///
+    /// pub struct Handler;
+    ///
+    /// #[async_trait]
+    /// impl EventHandler for Handler {
+    ///     async fn on_stream(&self, streamer: &Streamer, stream: &StreamData) {
+    ///         println!("{} Has Gone Live", streamer.name);
+    ///     }
+    ///
+    ///     async fn on_error(&self, error: String) {
+    ///         println!("Error Occurred");
+    ///     }
+    /// }
+    ///
+    /// let client: Client = Client::new("client id", "client token").event_handler(Handler);
+    /// ```
     pub fn event_handler<H: EventHandler + 'static>(mut self, event_handler: H) -> Self {
         self.event_handler = Some(Arc::new(event_handler));
 
         self
     }
 
+    /// Used to Add The SurrealDB to The Client
+    ///
+    /// # Arguments
+    /// * `self` - Requires a Client To Run The Function
+    /// * `database` - An Instance of Surreal<Db>
+    ///
+    /// # Examples
+    /// ```
+    /// use surrealdb::Surreal;
+    /// use twitchalerts::client::Client;
+    /// use surrealdb::engine::local::{Mem, Db};
+    ///
+    /// async fn main() -> Result<(), ()>  {
+    ///     let db: Surreal<Db> = Surreal::new::<Mem>(()).await?;
+    ///     let client: Client = Client::new("client id", "client token").database(db);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn database(mut self, database: Surreal<Db>) -> Self {
         self.database = Some(database);
 
         self
     }
 
+    /// Sets the Delay Between Each Check Cycle
+    /// Individual Checks are hard coded at 80ms
+    /// The Individual Check delay is 80ms as Twitch RateLimit is set at 800 Requests a Minute
+    ///
+    /// # Arguments
+    /// * `self` - Requires a Client To Run The Function
+    /// * `delay` - Requires a Tokio Duration to Set Delay Between Check Cycles
+    ///
+    /// # Examples
+    /// ```
+    /// use twitchalerts::client::Client;
+    ///
+    /// let delay = tokio::time::Duration::from_secs(15);
+    /// let client: Client = Client::new("client id", "client token").set_delay(delay);
+    ///
+    /// ```
+    pub fn set_delay(mut self, delay: tokio::time::Duration) -> Self {
+        self.delay = delay;
+
+        self
+    }
+
+    /// Used to start running the TwitchAlerts Client
+    ///
+    ///  # Arguments
+    /// * `self` - Requires a Client To Run The Function
+    ///
+    /// # Example
+    /// ```
+    /// use async_trait::async_trait;
+    /// use chrono::Utc;
+    /// use surrealdb::engine::local::Mem;
+    /// use surrealdb::Surreal;
+    /// use twitchalerts::client::{StreamData, Streamer, Client};
+    /// use twitchalerts::traits::EventHandler;
+    ///
+    /// pub struct Handler;
+    ///
+    /// #[async_trait]
+    /// impl EventHandler for Handler {
+    ///     async fn on_stream(&self, streamer: &Streamer, stream: &StreamData) {
+    ///         println!("{} Has Gone Live", streamer.name);
+    ///     }
+    ///
+    ///     async fn on_error(&self, error: String) {
+    ///         println!("Error Occurred");
+    ///     }
+    /// }
+    ///
+    /// async fn main() -> Result<(), ()> {
+    ///     let db = Surreal::new::<Mem>(()).await?;
+    ///
+    ///     db.use_ns("namespace").use_db("database").await?;
+    ///
+    ///     let streamer: Streamer = Streamer {
+    ///         id: "".to_string(),
+    ///         name: "example_streamer".to_string(),
+    ///         alerts: true,
+    ///         last_streamed: Utc::now(),
+    ///     };
+    ///
+    ///     db.query("CREATE streamers SET name = $name, alerts = $alerts, last_streamed = $last_streamed").bind(&streamer).await?;
+    ///
+    ///     _ = Client::new("client id", "client token").database(db).event_handler(Handler).run().await?;
+    ///
+    ///     Ok(())
+    /// }
+    ///```
     pub async fn run(self) -> Result<(), ()> {
         if self.event_handler.is_none() {
             panic!("No Event Handler Set");
@@ -96,7 +262,7 @@ impl Client {
 
 
         while running {
-            tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+            tokio::time::sleep(self.delay.clone()).await;
 
             let mut res = local_client.database.as_ref().expect("Error Occurred").query("SELECT * FROM streamers WHERE alerts = true").await.expect("Error Occurred");
 
@@ -109,11 +275,10 @@ impl Client {
             for streamer in streamers {
                 if let Some(time) = recent.get(streamer.name.as_str()) {
                     let difference: Duration = Utc::now() - *time;
-                    if 60 > difference.num_seconds() {
+                    if 30 > difference.num_seconds() {
                         continue;
                     }
                     else {
-                        running = false;
                         recent.remove(streamer.name.as_str());
                     }
                 }
@@ -150,14 +315,13 @@ impl Client {
                             handler.on_stream(&streamer, info).await;
                         },
                         Err(e) => {
-                            handler.on_error(e.to_string());
-                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                            handler.on_error(e.to_string()).await;
                         }
                     }
 
 
                 }).await.expect("Error Occurred");
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
             }
         };
         Ok(())
