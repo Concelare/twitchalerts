@@ -1,12 +1,13 @@
 # TwitchAlerts
 
-A rust crate to allow the users to detect when a streamer is live a trigger a custom event. Requires a Surreal Database but does support Memory and File Surreal Databases.  Rate Limiting is currently hardcoded but will be made dynamic later on.
+A rust crate to allow the users to detect when a streamer is live a trigger a custom event. Requires a Surreal Database but does support Memory and File Surreal Databases.  Rate Limiting is currently hardcoded at 80ms between individual checks but the delay between Check Cycles is fully customisable each streamer can currently be checked once every 30 seconds.
 
 
 ## Features
 
 - Stream Alerts
-- More Coming
+- Custom Delay
+- Custom Error Handling
 
 
 ## Example
