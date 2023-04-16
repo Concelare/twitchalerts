@@ -4,7 +4,6 @@ use chrono::{DateTime, Duration, Utc};
 use surrealdb::engine::local::Db;
 use surrealdb::Surreal;
 use serde::{Deserialize, Serialize};
-
 use crate::traits::EventHandler;
 
 /// All Streamer info store in Database
@@ -90,7 +89,6 @@ pub(crate) struct Pagination {
 pub struct Client {
     pub client_id: String,
     pub token: String,
-    status: bool,
     event_handler: Option<Arc<dyn EventHandler>>,
     database: Option<Surreal<Db>>,
     delay: tokio::time::Duration
@@ -114,7 +112,6 @@ impl Client {
         Client {
             client_id: client_id.to_string(),
             token: token.to_string(),
-            status: false,
             event_handler: None,
             database: None::<Surreal<Db>>,
             delay: tokio::time::Duration::from_millis(500)
@@ -246,7 +243,7 @@ impl Client {
     ///     Ok(())
     /// }
     ///```
-    pub async fn run(self) -> Result<(), ()> {
+    pub async fn run(self) -> Result<(), crate::error::Error> {
         if self.event_handler.is_none() {
             panic!("No Event Handler Set");
         }
@@ -291,7 +288,7 @@ impl Client {
                     _ => {panic!("No Event Handler Found");}
                 };
 
-                tokio::spawn(async move {
+                let result = tokio::spawn(async move {
                     let client = reqwest::Client::new();
 
                     let res = client.get(format!("https://api.twitch.tv/helix/streams?user_login={0}", streamer.name.clone()))
@@ -315,12 +312,48 @@ impl Client {
                             handler.on_stream(&streamer, info).await;
                         },
                         Err(e) => {
-                            handler.on_error(e.to_string()).await;
+                            if e.is_timeout() {
+                                handler.on_error(crate::error::Error::new("An error occurred due to timing out...", 1 as u16)).await;
+                            }
+                            else if e.is_connect() {
+                                handler.on_error(crate::error::Error::new("An error occurred when trying to connect...", 2 as u16)).await;
+                            }
+                            else if e.is_status() {
+                                handler.on_error(crate::error::Error::new("Status returned as an Error...", 3 as u16)).await;
+                            }
+                            else if e.is_redirect() {
+                                handler.on_error(crate::error::Error::new("An error occurred due to an attempted redirect...", 4 as u16)).await;
+                            }
+                            else if e.is_request() {
+                                handler.on_error(crate::error::Error::new("An error occurred due to the request...", 5 as u16)).await;
+                            }
+                            else if e.is_body() {
+                                handler.on_error(crate::error::Error::new("An error occurred with the request or response body...", 6 as u16)).await;
+                            }
+                            else if e.is_builder() {
+                                handler.on_error(crate::error::Error::new("An error occurred with the type builder...", 7 as u16)).await;
+                            }
+                            else {
+                                handler.on_error(crate::error::Error::new("An unknown error occurred with the request...", 8 as u16)).await;
+                            }
                         }
                     }
+                }).await;
 
-
-                }).await.expect("Error Occurred");
+                match result {
+                    Ok(()) => {},
+                    Err(e) => {
+                        if e.is_cancelled() {
+                            local_client.clone().event_handler.unwrap().on_error(crate::error::Error::new("A Tokio error occurred which resulted in a check being cancelled...", 9)).await;
+                        }
+                        else if e.is_panic() {
+                            local_client.clone().event_handler.unwrap().on_error(crate::error::Error::new("An error occurred causing the Tokio task to panic...", 10)).await;
+                        }
+                        else {
+                            local_client.clone().event_handler.unwrap().on_error(crate::error::Error::new("An unknown Tokio Error Occurred...", 11)).await;
+                        }
+                    }
+                }
                 tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
             }
         };
