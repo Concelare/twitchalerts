@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use crate::client::{StreamData, Streamer};
+use crate::client::StreamData;
 use crate::error::Error;
 
 /// Trait used to Specify EventHandler
@@ -10,6 +10,7 @@ use crate::error::Error;
 ///
 /// # Example
 /// ```
+/// use async_trait::async_trait;
 /// use twitchalerts::client::{StreamData, Streamer};
 /// use twitchalerts::traits::EventHandler;
 ///
@@ -29,6 +30,6 @@ use crate::error::Error;
 
 #[async_trait]
 pub trait EventHandler: Send + Sync + 'static {
-    async fn on_stream(&self, _streamer: &Streamer, _stream: &StreamData) {}
+    async fn on_stream(&self, _streamer: &String, _stream: &StreamData) {}
     async fn on_error(&self, _error: Error) {}
 }

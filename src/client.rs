@@ -1,28 +1,27 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
-use surrealdb::engine::local::Db;
-use surrealdb::Surreal;
 use serde::{Deserialize, Serialize};
+use tokio::task;
+use crate::config::Config;
 use crate::traits::EventHandler;
 
-/// All Streamer info store in Database
+/// Stores streamers who are currently streaming so that the event doesn't repeatedly trigger
+static mut C_STREAMING: Vec<String> = Vec::new();
+
+/// All Streamer info store in Config
 ///
 /// # Parameters
 /// * `id` - Database identifier
 /// * `name` - The Twitch streamer's name for checking
 /// * `alerts` - Are the alerts enabled for the streamer
-/// * `last_streamed` - Stores the date of the last started stream to stop duplicate alerts
-#[derive(Serialize, Deserialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq, Clone)]
 pub struct Streamer {
-    pub id: String,
-    pub name: String,
-    pub alerts: bool,
-    pub last_streamed: DateTime<Utc>,
+    pub name: String
 }
 
 /// The Response from the checking request
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct StreamsRes {
     pub data: Vec<StreamData>,
     pub pagination: Pagination
@@ -46,7 +45,7 @@ pub(crate) struct StreamsRes {
 /// * `tags_ids` - IDs of the Tags Used
 /// * `tags` - Tags of the Stream
 /// * `is_mature` - Is the Stream Set As Mature
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct StreamData {
     pub id: String,
     pub user_id: String,
@@ -70,7 +69,7 @@ pub struct StreamData {
 ///
 /// # Parameters
 /// * `cursor` - Cursor String
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct Pagination {
     pub cursor: String
 }
@@ -80,17 +79,18 @@ pub(crate) struct Pagination {
 ///
 /// # Parameters
 /// * `client_id` - Twitch Client ID, can be got from <https://dev.twitch.tv/>
-/// * `token` - Twitch Token, can be got from <https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/>
-/// * `status` - Status of alerts, are the running or not
-/// * `event_handler` - The Event Handler To Handle Alerts and Erros
-/// * `database` - The SurrealDb for the Client
+/// * `token` - Twitch Token, can be got from <https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/
+/// * `event_handler` - The Event Handler To Handle Alerts and Errors
+/// * `config` - The Config for the Client
+/// * `currently_streaming` - The streamers that are currently streaming
 /// * `delay` - Delay Between Check Cycles
 #[derive(Clone)]
 pub struct Client {
     pub client_id: String,
     pub token: String,
     event_handler: Option<Arc<dyn EventHandler>>,
-    database: Option<Surreal<Db>>,
+    config: Config,
+    currently_streaming: Vec<String>,
     delay: tokio::time::Duration
 }
 
@@ -106,15 +106,32 @@ impl Client {
     /// ```
     /// use twitchalerts::client::Client;
     ///
-    /// let client: Client = Client::new("client id", "client token");
+    /// let client: Client = Client::new();
     /// ```
-    pub fn new(client_id: &str, token: &str) -> Client {
+    pub async fn new() -> Client {
+
+        let c = crate::config::read_config().await;
+
+        if c.user_id.clone().is_none() {
+            panic!("Missing User ID in Config File!")
+        }
+        if c.token.clone().is_none() {
+            panic!("Missing User Token in Config File!")
+        }
+
+        let mut d = c.delay.clone().unwrap() as u64;
+
+        if d < 80u64 {
+            d = 80u64;
+        }
+
         Client {
-            client_id: client_id.to_string(),
-            token: token.to_string(),
+            client_id: c.user_id.clone().unwrap(),
+            token: c.token.clone().unwrap(),
             event_handler: None,
-            database: None::<Surreal<Db>>,
-            delay: tokio::time::Duration::from_millis(500)
+            config: c.clone(),
+            currently_streaming: Vec::new(),
+            delay: tokio::time::Duration::from_millis(d)
         }
     }
 
@@ -126,6 +143,7 @@ impl Client {
     ///
     /// # Example
     /// ```
+    /// use async_trait::async_trait;
     /// use twitchalerts::client::{Client, StreamData, Streamer};
     /// use twitchalerts::traits::EventHandler;
     ///
@@ -142,57 +160,10 @@ impl Client {
     ///     }
     /// }
     ///
-    /// let client: Client = Client::new("client id", "client token").event_handler(Handler);
+    /// let client: Client = Client::new().event_handler(Handler);
     /// ```
     pub fn event_handler<H: EventHandler + 'static>(mut self, event_handler: H) -> Self {
         self.event_handler = Some(Arc::new(event_handler));
-
-        self
-    }
-
-    /// Used to Add The SurrealDB to The Client
-    ///
-    /// # Arguments
-    /// * `self` - Requires a Client To Run The Function
-    /// * `database` - An Instance of Surreal<Db>
-    ///
-    /// # Examples
-    /// ```
-    /// use surrealdb::Surreal;
-    /// use twitchalerts::client::Client;
-    /// use surrealdb::engine::local::{Mem, Db};
-    ///
-    /// async fn main() -> Result<(), ()>  {
-    ///     let db: Surreal<Db> = Surreal::new::<Mem>(()).await?;
-    ///     let client: Client = Client::new("client id", "client token").database(db);
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
-    pub fn database(mut self, database: Surreal<Db>) -> Self {
-        self.database = Some(database);
-
-        self
-    }
-
-    /// Sets the Delay Between Each Check Cycle
-    /// Individual Checks are hard coded at 80ms
-    /// The Individual Check delay is 80ms as Twitch RateLimit is set at 800 Requests a Minute
-    ///
-    /// # Arguments
-    /// * `self` - Requires a Client To Run The Function
-    /// * `delay` - Requires a Tokio Duration to Set Delay Between Check Cycles
-    ///
-    /// # Examples
-    /// ```
-    /// use twitchalerts::client::Client;
-    ///
-    /// let delay = tokio::time::Duration::from_secs(15);
-    /// let client: Client = Client::new("client id", "client token").set_delay(delay);
-    ///
-    /// ```
-    pub fn set_delay(mut self, delay: tokio::time::Duration) -> Self {
-        self.delay = delay;
 
         self
     }
@@ -206,8 +177,6 @@ impl Client {
     /// ```
     /// use async_trait::async_trait;
     /// use chrono::Utc;
-    /// use surrealdb::engine::local::Mem;
-    /// use surrealdb::Surreal;
     /// use twitchalerts::client::{StreamData, Streamer, Client};
     /// use twitchalerts::traits::EventHandler;
     ///
@@ -225,20 +194,7 @@ impl Client {
     /// }
     ///
     /// async fn main() -> Result<(), ()> {
-    ///     let db = Surreal::new::<Mem>(()).await?;
-    ///
-    ///     db.use_ns("namespace").use_db("database").await?;
-    ///
-    ///     let streamer: Streamer = Streamer {
-    ///         id: "".to_string(),
-    ///         name: "example_streamer".to_string(),
-    ///         alerts: true,
-    ///         last_streamed: Utc::now(),
-    ///     };
-    ///
-    ///     db.query("CREATE streamers SET name = $name, alerts = $alerts, last_streamed = $last_streamed").bind(&streamer).await?;
-    ///
-    ///     _ = Client::new("client id", "client token").database(db).event_handler(Handler).run().await?;
+    ///      _ = Client::new().event_handler(Handler).run().await?;
     ///
     ///     Ok(())
     /// }
@@ -248,112 +204,90 @@ impl Client {
             panic!("No Event Handler Set");
         }
 
-        if self.database.is_none() {
-            panic!("No Database Set");
-        }
-
-        let local_client: Client = self.clone();
-
         let mut recent: HashMap<String, DateTime<Utc>> = HashMap::new();
         let mut running = true;
 
 
         while running {
+            let mut local_client: Client = self.clone();
+
             tokio::time::sleep(self.delay.clone()).await;
 
-            let mut res = local_client.database.as_ref().expect("Error Occurred").query("SELECT * FROM streamers WHERE alerts = true").await.expect("Error Occurred");
 
-            let streamers: Vec<Streamer> = res.take(0).expect("Error Occurred");
+            let streamers: Vec<String> = local_client.config.streamers.clone();
 
             if streamers.is_empty() {
                 running = false;
             }
 
+
             for streamer in streamers {
-                if let Some(time) = recent.get(streamer.name.as_str()) {
+
+                if let Some(time) = recent.get(streamer.as_str()) {
                     let difference: Duration = Utc::now() - *time;
                     if 30 > difference.num_seconds() {
                         continue;
                     }
                     else {
-                        recent.remove(streamer.name.as_str());
+                        recent.remove(streamer.as_str());
                     }
                 }
 
-                recent.insert(streamer.name.clone(), Utc::now());
+                recent.insert(streamer.clone(), Utc::now());
 
-                let client_cloned: Client = self.clone();
-                let handler = match self.event_handler.clone() {
-                    Some(evh) => evh,
-                    _ => {panic!("No Event Handler Found");}
-                };
+                let handler = local_client.event_handler.clone().unwrap();
+                let t_string = local_client.token.clone();
+                let u_string = local_client.client_id.clone();
 
-                let result = tokio::spawn(async move {
+                tokio::spawn(async move {
                     let client = reqwest::Client::new();
 
-                    let res = client.get(format!("https://api.twitch.tv/helix/streams?user_login={0}", streamer.name.clone()))
-                        .bearer_auth(client_cloned.token.clone()).header("Client-Id", client_cloned.client_id.clone()).send().await.expect("Error Occurred");
+
+                    let res = client.get(format!("https://api.twitch.tv/helix/streams?user_login={0}", streamer.clone()))
+                        .bearer_auth(t_string.clone()).header("Client-Id", u_string.clone()).send().await.expect("Error Occurred");
 
                     let rjson = res.json::<StreamsRes>().await;
 
                     match rjson {
-                        Ok(json) => {
+                        Ok(json) => unsafe {
                             if json.data.is_empty() {
                                 return;
                             }
 
                             let info = json.data.first().expect("Missing Info");
 
-                            if info.started_at == streamer.last_streamed {
+                            if C_STREAMING.contains(&info.user_id) {
                                 return;
                             }
 
-                            _ = client_cloned.database.expect("Missing Database").query("UPDATE streamers SET last_streamed = $last_streamed WHERE name = $name").bind(("last_streamed", info.started_at.clone())).bind(("name", streamer.name.clone())).await.expect("Error Occurred");
+                            C_STREAMING.push(info.user_id.clone());
                             handler.on_stream(&streamer, info).await;
                         },
-                        Err(e) => {
+                        Err(e) => unsafe {
                             if e.is_timeout() {
-                                handler.on_error(crate::error::Error::new("An error occurred due to timing out...", 1 as u16)).await;
-                            }
-                            else if e.is_connect() {
-                                handler.on_error(crate::error::Error::new("An error occurred when trying to connect...", 2 as u16)).await;
-                            }
-                            else if e.is_status() {
-                                handler.on_error(crate::error::Error::new("Status returned as an Error...", 3 as u16)).await;
-                            }
-                            else if e.is_redirect() {
-                                handler.on_error(crate::error::Error::new("An error occurred due to an attempted redirect...", 4 as u16)).await;
-                            }
-                            else if e.is_request() {
-                                handler.on_error(crate::error::Error::new("An error occurred due to the request...", 5 as u16)).await;
-                            }
-                            else if e.is_body() {
-                                handler.on_error(crate::error::Error::new("An error occurred with the request or response body...", 6 as u16)).await;
-                            }
-                            else if e.is_builder() {
-                                handler.on_error(crate::error::Error::new("An error occurred with the type builder...", 7 as u16)).await;
-                            }
-                            else {
-                                handler.on_error(crate::error::Error::new("An unknown error occurred with the request...", 8 as u16)).await;
+                                handler.on_error(crate::error::Error::new("An error occurred due to timing out...", 1u16)).await;
+                            } else if e.is_connect() {
+                                handler.on_error(crate::error::Error::new("An error occurred when trying to connect...", 2u16)).await;
+                            } else if e.is_status() {
+                                handler.on_error(crate::error::Error::new("Status returned as an Error...", 3u16)).await;
+                            } else if e.is_redirect() {
+                                handler.on_error(crate::error::Error::new("An error occurred due to an attempted redirect...", 4u16)).await;
+                            } else if e.is_request() {
+                                handler.on_error(crate::error::Error::new("An error occurred due to the request...", 5u16)).await;
+                            } else if e.is_body() {
+                                handler.on_error(crate::error::Error::new("An error occurred with the request or response body...", 6u16)).await;
+                            } else if e.is_builder() {
+                                handler.on_error(crate::error::Error::new("An error occurred with the type builder...", 7u16)).await;
+                            } else {
+                                if C_STREAMING.contains(&streamer) {
+                                    C_STREAMING.retain(|x | x.to_string() != streamer)
+                                }
                             }
                         }
                     }
-                }).await;
+                    task::yield_now().await;
+                }).await.expect("TODO: panic message");
 
-                match result {
-                    Ok(()) => {},
-                    Err(e) => {
-                        if e.is_cancelled() {
-                            local_client.clone().event_handler.unwrap().on_error(crate::error::Error::new("A Tokio error occurred which resulted in a check being cancelled...", 9)).await;
-                        }
-                        else if e.is_panic() {
-                            local_client.clone().event_handler.unwrap().on_error(crate::error::Error::new("An error occurred causing the Tokio task to panic...", 10)).await;
-                        }
-                        else {
-                            local_client.clone().event_handler.unwrap().on_error(crate::error::Error::new("An unknown Tokio Error Occurred...", 11)).await;
-                        }
-                    }
-                }
                 tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
             }
         };

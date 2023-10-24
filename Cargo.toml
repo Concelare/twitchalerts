@@ -1,21 +1,19 @@
 [package]
 name = "twitchalerts"
-version = "0.1.4"
+version = "0.1.5"
 description = "A crate which when it detect that a streamer is live which trigger the event handler, more features to be added."
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://crates.io/crates/twitchalerts"
 documentation = "https://docs.rs/twitchalerts"
 readme = "README.md"
-repository = "https://github.com/DeathsCookie/twitchalerts"
-authors = ["DeathsCookie"]
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+repository = "https://github.com/concelaredev/twitchalerts"
+authors = ["ConcelareDev"]
 
 [dependencies]
-surrealdb = { version = "1.0.0-beta.9", features = ["kv-mem"] }
-tokio = { version = "1.25.0", features = ["full"] }
-serde = {version = "1.0.152" }
-reqwest = { version = "0.11.14", features = ["blocking", "json"] }
-chrono = { version = "0.4.23" }
-async-trait = { version = "0.1.64" }
+tokio = { version = "1.33.0", features = ["rt", "macros", "io-std", "fs"] }
+serde = {version = "1.0.189", features = ["derive"] }
+reqwest = { version = "0.11.22", features = ["blocking", "json"] }
+chrono = { version = "0.4.31", features = ["serde"] }
+async-trait = { version = "0.1.74" }
+toml = { version = "0.8.2" }
